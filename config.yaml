@@ -1,0 +1,9 @@
+apiBaseUrl: "https://api.mainnet.klever.org"
+nodeBaseUrl: "https://node.mainnet.klever.org"
+pollInterval: 30
+
+validators:
+  - blsKey: "7aaa257b3da2a6444ffe5a8dd4f9f4d0d2a7c729addc723727618687aac38d08087149f239377abc9f045e01a00fb9040785c777abe11059297522ff0849dc268f152cce81b6250193422682a11b60684a9866a5443d5e279f7f00cfdcf68601"
+    displayName: "BN 1"
+  - blsKey: "e028b2ba641df7ac55fa5dbffa6e41c6424dd8ab8a67c9d4086b9efd63d73330e8c5eeceb38cc41e82cde55d7490770577305cd3132c9399e706b04f8197fbc58615cd813e319d4596751d382fb09241243787ed7bdd363ab68516cdd8f75a0c"
+    displayName: "BN 2"
