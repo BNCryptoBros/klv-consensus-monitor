@@ -105,7 +105,7 @@ func (m *Monitor) updateValidatorStates(validators []models.ValidatorInfo, epoch
 				state.DisplayName,
 				currentStatus,
 				epoch)
-		} else if previousStatus != currentStatus {
+		} else if previousStatus != currentStatus || currentStatus == "elected" {  // elected is always good
 			state.Status = currentStatus
 			state.Epoch = epoch
 			log.Printf("[%s] %s - Status changed: %s → %s (Epoch: %d)",
