@@ -7,3 +7,41 @@ validators:
     displayName: "BN 1"
   - blsKey: "e028b2ba641df7ac55fa5dbffa6e41c6424dd8ab8a67c9d4086b9efd63d73330e8c5eeceb38cc41e82cde55d7490770577305cd3132c9399e706b04f8197fbc58615cd813e319d4596751d382fb09241243787ed7bdd363ab68516cdd8f75a0c"
     displayName: "BN 2"
+
+slack:
+  enabled: false
+  webhookUrl: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+  messageTemplate: |
+    {
+      "text": "Validator Status Change",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🔔 Validator Status Changed"
+          }
+        },
+        {
+          "type": "section",
+          "fields": [
+            {
+              "type": "mrkdwn",
+              "text": "*Validator:*\n{{displayName}}"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Epoch:*\n{{epoch}}"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Old Status:*\n{{oldStatus}}"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*New Status:*\n{{newStatus}}"
+            }
+          ]
+        }
+      ]
+    }

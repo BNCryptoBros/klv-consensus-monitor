@@ -10,6 +10,7 @@ import (
 	"github.com/BNCryptoBros/klv-consensus-monitor/api"
 	"github.com/BNCryptoBros/klv-consensus-monitor/config"
 	"github.com/BNCryptoBros/klv-consensus-monitor/monitor"
+	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
 )
 
 func main() {
@@ -28,9 +29,11 @@ func main() {
 	log.Printf("API Base URL: %s", cfg.APIBaseURL)
 	log.Printf("Node Base URL: %s", cfg.NodeBaseURL)
 	log.Printf("Poll Interval: %d seconds", cfg.PollInterval)
+	log.Printf("Slack notifications: %v", cfg.Slack.Enabled)
 
 	apiClient := api.NewClient(cfg.APIBaseURL, cfg.NodeBaseURL)
-	mon := monitor.NewMonitor(apiClient, cfg.Validators)
+	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
+	mon := monitor.NewMonitor(apiClient, slackNotifier, cfg.Validators)
 
 	if err := mon.Run(); err != nil {
 		log.Fatalf("Failed to initialize monitor: %v", err)

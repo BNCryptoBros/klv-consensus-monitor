@@ -8,11 +8,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type SlackConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	WebhookURL      string `yaml:"webhookUrl"`
+	MessageTemplate string `yaml:"messageTemplate"`
+}
+
 type Config struct {
 	NodeBaseURL     string                      `yaml:"nodeBaseUrl"`
 	APIBaseURL     string                       `yaml:"apiBaseUrl"`
 	PollInterval   int                          `yaml:"pollInterval"`
 	Validators     []models.MonitoredValidator  `yaml:"validators"`
+	Slack          SlackConfig                  `yaml:"slack"`
 }
 
 func Load(filepath string) (*Config, error) {
