@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BNCryptoBros/klv-consensus-monitor/api"
 	"github.com/BNCryptoBros/klv-consensus-monitor/config"
 	"github.com/BNCryptoBros/klv-consensus-monitor/models"
 	"github.com/BNCryptoBros/klv-consensus-monitor/price"
+	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
 	klproto "github.com/klever-io/klever-go-sdk/models/proto"
 	"github.com/klever-io/klever-go-sdk/provider/tools/hasher"
 	"github.com/klever-io/klever-go-sdk/provider/tools/marshal"
@@ -36,6 +38,7 @@ type Generator struct {
 	cfg         *config.Config
 	apiClient   *api.Client
 	priceClient *price.Client
+	slack       *slack.Notifier
 	httpClient  *http.Client
 	marshalizer marshal.Marshalizer
 	hasher      hasher.Hasher
@@ -43,11 +46,12 @@ type Generator struct {
 	dryRun      bool
 }
 
-func NewGenerator(cfg *config.Config, apiClient *api.Client, dryRun bool) *Generator {
+func NewGenerator(cfg *config.Config, apiClient *api.Client, slackNotifier *slack.Notifier, dryRun bool) *Generator {
 	return &Generator{
 		cfg:         cfg,
 		apiClient:   apiClient,
 		priceClient: price.NewClient(),
+		slack:       slackNotifier,
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
 		marshalizer: &marshal.ProtoMarshalizer{},
 		hasher:      &hasher.Blake2b{},
@@ -71,6 +75,8 @@ type ValidatorPlan struct {
 	InfraNickname   string
 	Skipped         bool
 	SkipReason      string
+	TxHash          string
+	Submitted       bool
 }
 
 type walletPayout struct {
@@ -114,6 +120,12 @@ func (g *Generator) Run() error {
 		if err := g.processValidator(vp); err != nil {
 			failures++
 			log.Printf("FAILED to process %s: %v", vp.Validator.DisplayName, err)
+		}
+	}
+
+	if !g.dryRun && g.slack != nil && g.slack.Enabled() {
+		if err := g.notifySlack(plan); err != nil {
+			log.Printf("WARN: failed to send slack payday notification: %v", err)
 		}
 	}
 
@@ -356,6 +368,8 @@ func (g *Generator) processValidator(vp *ValidatorPlan) error {
 		return fmt.Errorf("save tx file: %w", err)
 	}
 
+	vp.TxHash = hashHex
+
 	if g.dryRun {
 		log.Printf("%s: dry-run; tx hash %s saved locally only", vp.Validator.DisplayName, hashHex)
 		return nil
@@ -364,6 +378,7 @@ func (g *Generator) processValidator(vp *ValidatorPlan) error {
 	if err := g.postToMultisig(vp.OwnerAddress, hashHex, rawTxJSON); err != nil {
 		return fmt.Errorf("post to multisig: %w", err)
 	}
+	vp.Submitted = true
 	log.Printf("%s: posted multisig transaction %s", vp.Validator.DisplayName, hashHex)
 	return nil
 }
@@ -451,6 +466,85 @@ func (g *Generator) postToMultisig(owner, hashHex string, rawTxJSON json.RawMess
 		return fmt.Errorf("multisig api returned %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+func (g *Generator) notifySlack(plan *Plan) error {
+	submitted := make([]*ValidatorPlan, 0, len(plan.Validators))
+	for _, vp := range plan.Validators {
+		if vp.Submitted {
+			submitted = append(submitted, vp)
+		}
+	}
+	if len(submitted) == 0 {
+		return nil
+	}
+
+	type aggKey struct{ address, nickname string }
+	totals := map[aggKey]int64{}
+	order := []aggKey{}
+	addTotal := func(addr, nick string, amt int64) {
+		k := aggKey{addr, nick}
+		if _, ok := totals[k]; !ok {
+			order = append(order, k)
+		}
+		totals[k] += amt
+	}
+
+	var grandTotal int64
+	for _, vp := range submitted {
+		if vp.InfraShare > 0 {
+			addTotal(vp.InfraAddress, vp.InfraNickname, vp.InfraShare)
+			grandTotal += vp.InfraShare
+		}
+		for _, p := range vp.WalletPayouts {
+			addTotal(p.Wallet.Address, p.Wallet.Nickname, p.Amount)
+			grandTotal += p.Amount
+		}
+	}
+
+	var totalsBuf strings.Builder
+	totalsBuf.WriteString("*How much each wallet pockets today:*\n")
+	for _, k := range order {
+		fmt.Fprintf(&totalsBuf, "  • *%s* (`%s`): *%s KLV*\n",
+			k.nickname, k.address, formatKLV(totals[k]))
+	}
+	fmt.Fprintf(&totalsBuf, "\n_Grand total being moved:_ *%s KLV*", formatKLV(grandTotal))
+
+	header := "🎉 PAYDAY! Cash is in the air 💸🥳"
+	subtitle := fmt.Sprintf("It's payment day, fam — %d transaction(s) just dropped on the multisig. Time to sign and celebrate!", len(submitted))
+
+	payload := map[string]any{
+		"text": header,
+		"blocks": []any{
+			map[string]any{
+				"type": "header",
+				"text": map[string]any{"type": "plain_text", "text": header, "emoji": true},
+			},
+			map[string]any{
+				"type": "section",
+				"text": map[string]any{"type": "mrkdwn", "text": subtitle},
+			},
+			map[string]any{"type": "divider"},
+			map[string]any{
+				"type": "section",
+				"text": map[string]any{"type": "mrkdwn", "text": totalsBuf.String()},
+			},
+			map[string]any{
+				"type": "context",
+				"elements": []any{
+					map[string]any{
+						"type": "mrkdwn",
+						"text": "Sign the transactions at <https://kleverscan.org/multisign|kleverscan.org/multisign>",
+					},
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return g.slack.PostMessage(string(raw))
 }
 
 func formatKLV(atomic int64) string {

@@ -82,11 +82,15 @@ func runMonitor(cfg *config.Config, apiClient *api.Client) {
 
 func runPayments(cfg *config.Config, apiClient *api.Client, dryRun bool) {
 	if dryRun {
-		log.Printf("Running payments mode (DRY RUN — no multisig submission)")
+		log.Printf("Running payments mode (DRY RUN — no multisig submission, no Slack)")
 	} else {
 		log.Printf("Running payments mode — will POST unsigned transactions to %s", cfg.Payouts.MultisigAPIURL)
+		if cfg.Slack.Enabled {
+			log.Printf("Slack payday notification: enabled")
+		}
 	}
-	gen := payments.NewGenerator(cfg, apiClient, dryRun)
+	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
+	gen := payments.NewGenerator(cfg, apiClient, slackNotifier, dryRun)
 	if err := gen.Run(); err != nil {
 		log.Fatalf("payments run failed: %v", err)
 	}
