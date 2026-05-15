@@ -39,7 +39,30 @@ func (n *Notifier) SendStatusChange(displayName, oldStatus, newStatus string, ep
 
 	message := n.buildMessage(displayName, oldStatus, newStatus, epoch)
 
-	resp, err := n.httpClient.Post(n.webhookURL, "application/json", bytes.NewBufferString(message))
+	if err := n.post(message); err != nil {
+		return err
+	}
+
+	log.Printf("Slack notification sent for %s status change", displayName)
+	return nil
+}
+
+func (n *Notifier) Enabled() bool {
+	return n.enabled
+}
+
+func (n *Notifier) PostMessage(payload string) error {
+	if !n.enabled {
+		return nil
+	}
+	if n.webhookURL == "" {
+		return fmt.Errorf("slack webhook URL is not configured")
+	}
+	return n.post(payload)
+}
+
+func (n *Notifier) post(payload string) error {
+	resp, err := n.httpClient.Post(n.webhookURL, "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		return fmt.Errorf("failed to send slack notification: %w", err)
 	}
@@ -48,8 +71,6 @@ func (n *Notifier) SendStatusChange(displayName, oldStatus, newStatus string, ep
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("slack webhook returned status: %d", resp.StatusCode)
 	}
-
-	log.Printf("Slack notification sent for %s status change", displayName)
 	return nil
 }
 
