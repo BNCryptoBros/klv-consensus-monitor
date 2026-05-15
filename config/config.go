@@ -15,11 +15,12 @@ type SlackConfig struct {
 }
 
 type Config struct {
-	NodeBaseURL     string                      `yaml:"nodeBaseUrl"`
-	APIBaseURL     string                       `yaml:"apiBaseUrl"`
-	PollInterval   int                          `yaml:"pollInterval"`
-	Validators     []models.MonitoredValidator  `yaml:"validators"`
-	Slack          SlackConfig                  `yaml:"slack"`
+	NodeBaseURL    string                      `yaml:"nodeBaseUrl"`
+	APIBaseURL     string                      `yaml:"apiBaseUrl"`
+	PollInterval   int                         `yaml:"pollInterval"`
+	Validators     []models.MonitoredValidator `yaml:"validators"`
+	Slack          SlackConfig                 `yaml:"slack"`
+	Payouts        models.PayoutsConfig        `yaml:"payouts"`
 }
 
 func Load(filepath string) (*Config, error) {
@@ -45,5 +46,41 @@ func Load(filepath string) (*Config, error) {
 		cfg.PollInterval = 30
 	}
 
+	if cfg.Payouts.MultisigAPIURL == "" {
+		cfg.Payouts.MultisigAPIURL = "https://multisign.mainnet.klever.org"
+	}
+
+	if cfg.Payouts.InfraCost.PriceAPIURL == "" {
+		cfg.Payouts.InfraCost.PriceAPIURL = "https://api.coingecko.com/api/v3/simple/price?ids=klever&vs_currencies=brl"
+	}
+
+	if cfg.Payouts.InfraCost.PriceJSONPath == "" {
+		cfg.Payouts.InfraCost.PriceJSONPath = "klever.brl"
+	}
+
 	return &cfg, nil
+}
+
+func (c *Config) ValidatePayouts() error {
+	if len(c.Payouts.ValidatorWallets) == 0 {
+		return fmt.Errorf("payouts.validatorWallets must contain at least one entry")
+	}
+	for i, w := range c.Payouts.ValidatorWallets {
+		if w.Address == "" {
+			return fmt.Errorf("payouts.validatorWallets[%d].address is required", i)
+		}
+		if w.Nickname == "" {
+			return fmt.Errorf("payouts.validatorWallets[%d].nickname is required", i)
+		}
+	}
+	if c.Payouts.BalanceFloor < 0 {
+		return fmt.Errorf("payouts.balanceFloor must be >= 0")
+	}
+	if c.Payouts.InfraCost.AmountBRLCents < 0 {
+		return fmt.Errorf("payouts.infraCost.amountBRLCents must be >= 0")
+	}
+	if c.Payouts.InfraCost.ManagerAddress == "" {
+		return fmt.Errorf("payouts.infraCost.managerAddress is required")
+	}
+	return nil
 }
