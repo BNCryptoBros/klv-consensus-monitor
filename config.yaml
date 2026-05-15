@@ -5,8 +5,30 @@ pollInterval: 30
 validators:
   - blsKey: "7aaa257b3da2a6444ffe5a8dd4f9f4d0d2a7c729addc723727618687aac38d08087149f239377abc9f045e01a00fb9040785c777abe11059297522ff0849dc268f152cce81b6250193422682a11b60684a9866a5443d5e279f7f00cfdcf68601"
     displayName: "BN 1"
+    ownerAddress: "klv16q30jt6pkj9szqshev3lyu3sjevkcz7en8n67409nss5rzhrul7scr3nqd"
   - blsKey: "e028b2ba641df7ac55fa5dbffa6e41c6424dd8ab8a67c9d4086b9efd63d73330e8c5eeceb38cc41e82cde55d7490770577305cd3132c9399e706b04f8197fbc58615cd813e319d4596751d382fb09241243787ed7bdd363ab68516cdd8f75a0c"
     displayName: "BN 2"
+    ownerAddress: "klv102k8ch9062xkzlqwhyqcgpe6x4c0wf59zx208ak0qrmly0rxj98s33r3uz"
+  - blsKey: "2560cef57afca2190dbde0f1f26c53672a45fae2b00013c711ea27a5f3efd353cbde9776fe48dec2b909754d41faae01b26b0c935656438ac2f165ac0e34184b859b183c632e19cba32d3205f2e70118557a82e5d89d5e67e45e6e557dd71387"
+    displayName: "BN 3"
+    ownerAddress: "klv1k40jv3ndwaxzmgeywdqfys642jwh0mejhkaamf6jnlrv4egc9rcqy25gna"
+
+payouts:
+  multisigApiUrl: "https://multisign.mainnet.klever.org"
+  balanceFloor: 15000000000                # atomic units; 15000 KLV (1 KLV = 1_000_000 atomic)
+  validatorWallets:
+    - address: "klv137tsxetne45eanp70f5a4ed4ervhzkapyvc9r6h9sw7nrcwe60qqywn7al"
+      nickname: "B"
+    - address: "klv18a5nrr0ekfn2a9wkgsvyacc4t7fxsnftlazcw2ndupvpqysvaqdsnfr695"
+      nickname: "N"    
+    - address: "klv1axxyp3ka0yrsz2nxhj3nwm2mx982nc3ytwlvzuag2nuj3v7djxxs620ct0"
+      nickname: "C"
+  infraCost:
+    amountBRLCents: 10700                 # R$ 500.00
+    priceApiUrl: "https://api.coingecko.com/api/v3/simple/price?ids=klever&vs_currencies=brl"
+    priceJsonPath: "klever.brl"           # dot-path to the BRL-per-KLV number in the response
+    managerAddress: "klv18a5nrr0ekfn2a9wkgsvyacc4t7fxsnftlazcw2ndupvpqysvaqdsnfr695"
+    managerNickname: "Infra"
 
 slack:
   enabled: false
