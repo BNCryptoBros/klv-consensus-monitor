@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -10,13 +11,19 @@ import (
 	"github.com/BNCryptoBros/klv-consensus-monitor/api"
 	"github.com/BNCryptoBros/klv-consensus-monitor/config"
 	"github.com/BNCryptoBros/klv-consensus-monitor/monitor"
+	"github.com/BNCryptoBros/klv-consensus-monitor/payments"
 	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
 )
 
 func main() {
 	log.SetFlags(0)
 
-	cfg, err := config.Load("config.yaml")
+	mode := flag.String("mode", "monitor", "run mode: monitor | payments")
+	configPath := flag.String("config", "config.yaml", "path to config file")
+	dryRun := flag.Bool("dry-run", false, "payments mode: build txs locally but do not POST to multisig API")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -25,13 +32,26 @@ func main() {
 		log.Fatal("No validators configured in config.yaml")
 	}
 
-	log.Printf("Loaded configuration: monitoring %d validators", len(cfg.Validators))
 	log.Printf("API Base URL: %s", cfg.APIBaseURL)
 	log.Printf("Node Base URL: %s", cfg.NodeBaseURL)
+
+	apiClient := api.NewClient(cfg.APIBaseURL, cfg.NodeBaseURL)
+
+	switch *mode {
+	case "monitor":
+		runMonitor(cfg, apiClient)
+	case "payments":
+		runPayments(cfg, apiClient, *dryRun)
+	default:
+		log.Fatalf("Unknown mode %q (expected: monitor | payments)", *mode)
+	}
+}
+
+func runMonitor(cfg *config.Config, apiClient *api.Client) {
+	log.Printf("Loaded configuration: monitoring %d validators", len(cfg.Validators))
 	log.Printf("Poll Interval: %d seconds", cfg.PollInterval)
 	log.Printf("Slack notifications: %v", cfg.Slack.Enabled)
 
-	apiClient := api.NewClient(cfg.APIBaseURL, cfg.NodeBaseURL)
 	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
 	mon := monitor.NewMonitor(apiClient, slackNotifier, cfg.Validators)
 
@@ -57,5 +77,17 @@ func main() {
 			log.Printf("Received signal %v, shutting down gracefully...", sig)
 			return
 		}
+	}
+}
+
+func runPayments(cfg *config.Config, apiClient *api.Client, dryRun bool) {
+	if dryRun {
+		log.Printf("Running payments mode (DRY RUN — no multisig submission)")
+	} else {
+		log.Printf("Running payments mode — will POST unsigned transactions to %s", cfg.Payouts.MultisigAPIURL)
+	}
+	gen := payments.NewGenerator(cfg, apiClient, dryRun)
+	if err := gen.Run(); err != nil {
+		log.Fatalf("payments run failed: %v", err)
 	}
 }
