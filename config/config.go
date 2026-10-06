@@ -14,12 +14,22 @@ type SlackConfig struct {
 	MessageTemplate string `yaml:"messageTemplate"`
 }
 
+type TelegramConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	BotToken        string `yaml:"botToken"`
+	ChatID          string `yaml:"chatId"`
+	MessageTemplate string `yaml:"messageTemplate"`
+}
+
+const defaultTelegramMessageTemplate = "🔔 <b>Validator Status Changed</b>\n\n<b>Validator:</b> {{displayName}}\n<b>Epoch:</b> {{epoch}}\n<b>Old Status:</b> {{oldStatus}}\n<b>New Status:</b> {{newStatus}}"
+
 type Config struct {
 	NodeBaseURL    string                      `yaml:"nodeBaseUrl"`
 	APIBaseURL     string                      `yaml:"apiBaseUrl"`
 	PollInterval   int                         `yaml:"pollInterval"`
 	Validators     []models.MonitoredValidator `yaml:"validators"`
 	Slack          SlackConfig                 `yaml:"slack"`
+	Telegram       TelegramConfig              `yaml:"telegram"`
 	Payouts        models.PayoutsConfig        `yaml:"payouts"`
 }
 
@@ -44,6 +54,10 @@ func Load(filepath string) (*Config, error) {
 
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 30
+	}
+
+	if cfg.Telegram.MessageTemplate == "" {
+		cfg.Telegram.MessageTemplate = defaultTelegramMessageTemplate
 	}
 
 	if cfg.Payouts.MultisigAPIURL == "" {
