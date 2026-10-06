@@ -13,6 +13,7 @@ import (
 	"github.com/BNCryptoBros/klv-consensus-monitor/monitor"
 	"github.com/BNCryptoBros/klv-consensus-monitor/payments"
 	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
+	"github.com/BNCryptoBros/klv-consensus-monitor/telegram"
 )
 
 func main() {
@@ -51,9 +52,11 @@ func runMonitor(cfg *config.Config, apiClient *api.Client) {
 	log.Printf("Loaded configuration: monitoring %d validators", len(cfg.Validators))
 	log.Printf("Poll Interval: %d seconds", cfg.PollInterval)
 	log.Printf("Slack notifications: %v", cfg.Slack.Enabled)
+	log.Printf("Telegram notifications: %v", cfg.Telegram.Enabled)
 
 	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
-	mon := monitor.NewMonitor(apiClient, slackNotifier, cfg.Validators)
+	telegramNotifier := newTelegramNotifier(cfg)
+	mon := monitor.NewMonitor(apiClient, slackNotifier, telegramNotifier, cfg.Validators)
 
 	if err := mon.Run(); err != nil {
 		log.Fatalf("Failed to initialize monitor: %v", err)
@@ -82,16 +85,24 @@ func runMonitor(cfg *config.Config, apiClient *api.Client) {
 
 func runPayments(cfg *config.Config, apiClient *api.Client, dryRun bool) {
 	if dryRun {
-		log.Printf("Running payments mode (DRY RUN — no multisig submission, no Slack)")
+		log.Printf("Running payments mode (DRY RUN — no multisig submission, no Slack/Telegram)")
 	} else {
 		log.Printf("Running payments mode — will POST unsigned transactions to %s", cfg.Payouts.MultisigAPIURL)
 		if cfg.Slack.Enabled {
 			log.Printf("Slack payday notification: enabled")
 		}
+		if cfg.Telegram.Enabled {
+			log.Printf("Telegram payday notification: enabled")
+		}
 	}
 	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
-	gen := payments.NewGenerator(cfg, apiClient, slackNotifier, dryRun)
+	telegramNotifier := newTelegramNotifier(cfg)
+	gen := payments.NewGenerator(cfg, apiClient, slackNotifier, telegramNotifier, dryRun)
 	if err := gen.Run(); err != nil {
 		log.Fatalf("payments run failed: %v", err)
 	}
+}
+
+func newTelegramNotifier(cfg *config.Config) *telegram.Notifier {
+	return telegram.NewNotifier(cfg.Telegram.Enabled, cfg.Telegram.BotToken, cfg.Telegram.ChatID, cfg.Telegram.MessageTemplate)
 }

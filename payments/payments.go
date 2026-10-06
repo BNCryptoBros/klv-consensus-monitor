@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"math"
@@ -19,6 +20,7 @@ import (
 	"github.com/BNCryptoBros/klv-consensus-monitor/models"
 	"github.com/BNCryptoBros/klv-consensus-monitor/price"
 	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
+	"github.com/BNCryptoBros/klv-consensus-monitor/telegram"
 	klproto "github.com/klever-io/klever-go-sdk/models/proto"
 	"github.com/klever-io/klever-go-sdk/provider/tools/hasher"
 	"github.com/klever-io/klever-go-sdk/provider/tools/marshal"
@@ -39,6 +41,7 @@ type Generator struct {
 	apiClient   *api.Client
 	priceClient *price.Client
 	slack       *slack.Notifier
+	telegram    *telegram.Notifier
 	httpClient  *http.Client
 	marshalizer marshal.Marshalizer
 	hasher      hasher.Hasher
@@ -46,12 +49,13 @@ type Generator struct {
 	dryRun      bool
 }
 
-func NewGenerator(cfg *config.Config, apiClient *api.Client, slackNotifier *slack.Notifier, dryRun bool) *Generator {
+func NewGenerator(cfg *config.Config, apiClient *api.Client, slackNotifier *slack.Notifier, telegramNotifier *telegram.Notifier, dryRun bool) *Generator {
 	return &Generator{
 		cfg:         cfg,
 		apiClient:   apiClient,
 		priceClient: price.NewClient(),
 		slack:       slackNotifier,
+		telegram:    telegramNotifier,
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
 		marshalizer: &marshal.ProtoMarshalizer{},
 		hasher:      &hasher.Blake2b{},
@@ -83,6 +87,24 @@ type walletPayout struct {
 	Wallet models.ValidatorWallet
 	Amount int64
 }
+
+type walletTotal struct {
+	Address  string
+	Nickname string
+	Amount   int64
+}
+
+type paydaySummary struct {
+	Submitted  int
+	Totals     []walletTotal
+	GrandTotal int64
+}
+
+const (
+	paydayHeader   = "🎉 PAYDAY! Cash is in the air 💸🥳"
+	paydaySubtitle = "It's payment day, fam — %d transaction(s) just dropped on the multisig. Time to sign and celebrate!"
+	multisignURL   = "https://kleverscan.org/multisign"
+)
 
 type Plan struct {
 	Validators      []*ValidatorPlan
@@ -126,6 +148,12 @@ func (g *Generator) Run() error {
 	if !g.dryRun && g.slack != nil && g.slack.Enabled() {
 		if err := g.notifySlack(plan); err != nil {
 			log.Printf("WARN: failed to send slack payday notification: %v", err)
+		}
+	}
+
+	if !g.dryRun && g.telegram != nil && g.telegram.Enabled() {
+		if err := g.notifyTelegram(plan); err != nil {
+			log.Printf("WARN: failed to send telegram payday notification: %v", err)
 		}
 	}
 
@@ -468,50 +496,52 @@ func (g *Generator) postToMultisig(owner, hashHex string, rawTxJSON json.RawMess
 	return nil
 }
 
-func (g *Generator) notifySlack(plan *Plan) error {
-	submitted := make([]*ValidatorPlan, 0, len(plan.Validators))
-	for _, vp := range plan.Validators {
-		if vp.Submitted {
-			submitted = append(submitted, vp)
-		}
-	}
-	if len(submitted) == 0 {
-		return nil
-	}
-
-	type aggKey struct{ address, nickname string }
-	totals := map[aggKey]int64{}
-	order := []aggKey{}
+func buildPaydaySummary(plan *Plan) paydaySummary {
+	summary := paydaySummary{}
+	index := map[[2]string]int{}
 	addTotal := func(addr, nick string, amt int64) {
-		k := aggKey{addr, nick}
-		if _, ok := totals[k]; !ok {
-			order = append(order, k)
+		k := [2]string{addr, nick}
+		i, ok := index[k]
+		if !ok {
+			i = len(summary.Totals)
+			index[k] = i
+			summary.Totals = append(summary.Totals, walletTotal{Address: addr, Nickname: nick})
 		}
-		totals[k] += amt
+		summary.Totals[i].Amount += amt
+		summary.GrandTotal += amt
 	}
 
-	var grandTotal int64
-	for _, vp := range submitted {
+	for _, vp := range plan.Validators {
+		if !vp.Submitted {
+			continue
+		}
+		summary.Submitted++
 		if vp.InfraShare > 0 {
 			addTotal(vp.InfraAddress, vp.InfraNickname, vp.InfraShare)
-			grandTotal += vp.InfraShare
 		}
 		for _, p := range vp.WalletPayouts {
 			addTotal(p.Wallet.Address, p.Wallet.Nickname, p.Amount)
-			grandTotal += p.Amount
 		}
+	}
+	return summary
+}
+
+func (g *Generator) notifySlack(plan *Plan) error {
+	summary := buildPaydaySummary(plan)
+	if summary.Submitted == 0 {
+		return nil
 	}
 
 	var totalsBuf strings.Builder
 	totalsBuf.WriteString("*How much each wallet pockets today:*\n")
-	for _, k := range order {
+	for _, t := range summary.Totals {
 		fmt.Fprintf(&totalsBuf, "  • *%s* (`%s`): *%s KLV*\n",
-			k.nickname, k.address, formatKLV(totals[k]))
+			t.Nickname, t.Address, formatKLV(t.Amount))
 	}
-	fmt.Fprintf(&totalsBuf, "\n_Grand total being moved:_ *%s KLV*", formatKLV(grandTotal))
+	fmt.Fprintf(&totalsBuf, "\n_Grand total being moved:_ *%s KLV*", formatKLV(summary.GrandTotal))
 
-	header := "🎉 PAYDAY! Cash is in the air 💸🥳"
-	subtitle := fmt.Sprintf("It's payment day, fam — %d transaction(s) just dropped on the multisig. Time to sign and celebrate!", len(submitted))
+	header := paydayHeader
+	subtitle := fmt.Sprintf(paydaySubtitle, summary.Submitted)
 
 	payload := map[string]any{
 		"text": header,
@@ -534,7 +564,7 @@ func (g *Generator) notifySlack(plan *Plan) error {
 				"elements": []any{
 					map[string]any{
 						"type": "mrkdwn",
-						"text": "Sign the transactions at <https://kleverscan.org/multisign|kleverscan.org/multisign>",
+						"text": fmt.Sprintf("Sign the transactions at <%s|kleverscan.org/multisign>", multisignURL),
 					},
 				},
 			},
@@ -545,6 +575,26 @@ func (g *Generator) notifySlack(plan *Plan) error {
 		return err
 	}
 	return g.slack.PostMessage(string(raw))
+}
+
+func (g *Generator) notifyTelegram(plan *Plan) error {
+	summary := buildPaydaySummary(plan)
+	if summary.Submitted == 0 {
+		return nil
+	}
+
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "<b>%s</b>\n\n", html.EscapeString(paydayHeader))
+	fmt.Fprintf(&msg, "%s\n\n", html.EscapeString(fmt.Sprintf(paydaySubtitle, summary.Submitted)))
+	msg.WriteString("<b>How much each wallet pockets today:</b>\n")
+	for _, t := range summary.Totals {
+		fmt.Fprintf(&msg, "  • <b>%s</b> (<code>%s</code>): <b>%s KLV</b>\n",
+			html.EscapeString(t.Nickname), html.EscapeString(t.Address), formatKLV(t.Amount))
+	}
+	fmt.Fprintf(&msg, "\n<i>Grand total being moved:</i> <b>%s KLV</b>\n\n", formatKLV(summary.GrandTotal))
+	fmt.Fprintf(&msg, "Sign the transactions at <a href=\"%s\">kleverscan.org/multisign</a>", multisignURL)
+
+	return g.telegram.PostMessage(msg.String())
 }
 
 func formatKLV(atomic int64) string {
