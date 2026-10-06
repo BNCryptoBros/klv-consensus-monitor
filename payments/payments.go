@@ -597,6 +597,27 @@ func (g *Generator) notifyTelegram(plan *Plan) error {
 	return g.telegram.PostMessage(msg.String())
 }
 
+func (g *Generator) NotifyFailure(runErr error) {
+	if g.dryRun {
+		return
+	}
+	text := fmt.Sprintf("Payments run failed: %v. Check the logs and the multisig before re-running, some transactions may already have been posted.", runErr)
+	if g.slack != nil && g.slack.Enabled() {
+		raw, err := json.Marshal(map[string]any{"text": "🚨 " + text})
+		if err == nil {
+			err = g.slack.PostMessage(string(raw))
+		}
+		if err != nil {
+			log.Printf("WARN: failed to send slack failure notification: %v", err)
+		}
+	}
+	if g.telegram != nil && g.telegram.Enabled() {
+		if err := g.telegram.PostMessage("🚨 " + html.EscapeString(text)); err != nil {
+			log.Printf("WARN: failed to send telegram failure notification: %v", err)
+		}
+	}
+}
+
 func formatKLV(atomic int64) string {
 	sign := ""
 	if atomic < 0 {

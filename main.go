@@ -99,6 +99,7 @@ func runPayments(cfg *config.Config, apiClient *api.Client, dryRun bool) {
 	telegramNotifier := newTelegramNotifier(cfg)
 	gen := payments.NewGenerator(cfg, apiClient, slackNotifier, telegramNotifier, dryRun)
 	if err := gen.Run(); err != nil {
+		gen.NotifyFailure(err)
 		log.Fatalf("payments run failed: %v", err)
 	}
 }
