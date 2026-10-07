@@ -22,23 +22,16 @@ func NewClient() *Client {
 	}
 }
 
-type retryableError struct {
-	err error
-}
-
-func (e *retryableError) Error() string {
-	return e.err.Error()
-}
-
 func (c *Client) FetchKLVPerBRL(apiURL, jsonPath string) (float64, error) {
 	var body []byte
+	var retryable bool
 	var err error
 	for attempt := 0; ; attempt++ {
-		body, err = c.fetch(apiURL)
+		body, retryable, err = c.fetch(apiURL)
 		if err == nil {
 			break
 		}
-		if _, ok := err.(*retryableError); !ok || attempt >= len(c.retryDelays) {
+		if !retryable || attempt >= len(c.retryDelays) {
 			return 0, err
 		}
 		delay := c.retryDelays[attempt]
@@ -66,24 +59,22 @@ func (c *Client) FetchKLVPerBRL(apiURL, jsonPath string) (float64, error) {
 	return priceBRLPerKLV, nil
 }
 
-func (c *Client) fetch(apiURL string) ([]byte, error) {
+func (c *Client) fetch(apiURL string) ([]byte, bool, error) {
 	resp, err := c.httpClient.Get(apiURL)
 	if err != nil {
-		return nil, &retryableError{fmt.Errorf("fetch price: %w", err)}
+		return nil, true, fmt.Errorf("fetch price: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &retryableError{fmt.Errorf("read price: %w", err)}
+		return nil, true, fmt.Errorf("read price: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("price api returned %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			return nil, &retryableError{err}
-		}
-		return nil, err
+		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return nil, retryable, err
 	}
-	return body, nil
+	return body, false, nil
 }
 
 func walkPath(node any, path string) (any, error) {
