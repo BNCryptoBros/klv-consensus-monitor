@@ -8,9 +8,10 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BNCryptoBros/klv-consensus-monitor/notify"
 )
 
 const apiBaseURL = "https://api.telegram.org"
@@ -35,6 +36,10 @@ func NewNotifier(enabled bool, botToken, chatID, messageTemplate string) *Notifi
 	}
 }
 
+func (n *Notifier) Name() string {
+	return "Telegram"
+}
+
 func (n *Notifier) SendStatusChange(displayName, oldStatus, newStatus string, epoch int) error {
 	if !n.enabled {
 		return nil
@@ -44,7 +49,7 @@ func (n *Notifier) SendStatusChange(displayName, oldStatus, newStatus string, ep
 		return err
 	}
 
-	message := n.buildMessage(displayName, oldStatus, newStatus, epoch)
+	message := notify.RenderStatus(n.messageTemplate, displayName, oldStatus, newStatus, epoch, html.EscapeString)
 
 	if err := n.post(message); err != nil {
 		return err
@@ -54,11 +59,30 @@ func (n *Notifier) SendStatusChange(displayName, oldStatus, newStatus string, ep
 	return nil
 }
 
-func (n *Notifier) Enabled() bool {
-	return n.enabled
+func (n *Notifier) SendPayday(summary notify.Summary) error {
+	if !n.enabled {
+		return nil
+	}
+
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "<b>%s</b>\n\n", html.EscapeString(notify.PaydayHeader))
+	fmt.Fprintf(&msg, "%s\n\n", html.EscapeString(fmt.Sprintf(notify.PaydaySubtitle, summary.Submitted)))
+	msg.WriteString("<b>How much each wallet pockets today:</b>\n")
+	for _, t := range summary.Totals {
+		fmt.Fprintf(&msg, "  • <b>%s</b> (<code>%s</code>): <b>%s KLV</b>\n",
+			html.EscapeString(t.Nickname), html.EscapeString(t.Address), notify.FormatKLV(t.Amount))
+	}
+	fmt.Fprintf(&msg, "\n<i>Grand total being moved:</i> <b>%s KLV</b>\n\n", notify.FormatKLV(summary.GrandTotal))
+	fmt.Fprintf(&msg, "Sign the transactions at <a href=\"%s\">kleverscan.org/multisign</a>", notify.MultisignURL)
+
+	return n.postMessage(msg.String())
 }
 
-func (n *Notifier) PostMessage(text string) error {
+func (n *Notifier) SendFailure(runErr error, submitted int) error {
+	return n.postMessage("🚨 " + html.EscapeString(notify.FailureText(runErr, submitted)))
+}
+
+func (n *Notifier) postMessage(text string) error {
 	if !n.enabled {
 		return nil
 	}
@@ -101,23 +125,6 @@ func (n *Notifier) post(text string) error {
 		return fmt.Errorf("telegram api returned status %d: %s", resp.StatusCode, string(body))
 	}
 	return nil
-}
-
-func (n *Notifier) buildMessage(displayName, oldStatus, newStatus string, epoch int) string {
-	message := n.messageTemplate
-
-	replacements := map[string]string{
-		"{{displayName}}": html.EscapeString(displayName),
-		"{{oldStatus}}":   html.EscapeString(oldStatus),
-		"{{newStatus}}":   html.EscapeString(newStatus),
-		"{{epoch}}":       strconv.Itoa(epoch),
-	}
-
-	for placeholder, value := range replacements {
-		message = strings.ReplaceAll(message, placeholder, value)
-	}
-
-	return message
 }
 
 func redactToken(err error, token string) error {

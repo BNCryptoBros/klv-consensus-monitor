@@ -5,29 +5,25 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"log"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/BNCryptoBros/klv-consensus-monitor/api"
 	"github.com/BNCryptoBros/klv-consensus-monitor/config"
 	"github.com/BNCryptoBros/klv-consensus-monitor/models"
+	"github.com/BNCryptoBros/klv-consensus-monitor/notify"
 	"github.com/BNCryptoBros/klv-consensus-monitor/price"
-	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
-	"github.com/BNCryptoBros/klv-consensus-monitor/telegram"
 	klproto "github.com/klever-io/klever-go-sdk/models/proto"
 	"github.com/klever-io/klever-go-sdk/provider/tools/hasher"
 	"github.com/klever-io/klever-go-sdk/provider/tools/marshal"
 )
 
 const (
-	klvPrecision           = 6
 	klvAtomicUnitsPerUnit  = 1_000_000
 	contractTypeTransfer   = uint32(0)
 	contractTypeClaim      = uint32(9)
@@ -40,8 +36,7 @@ type Generator struct {
 	cfg         *config.Config
 	apiClient   *api.Client
 	priceClient *price.Client
-	slack       *slack.Notifier
-	telegram    *telegram.Notifier
+	notifier    notify.Group
 	httpClient  *http.Client
 	marshalizer marshal.Marshalizer
 	hasher      hasher.Hasher
@@ -49,13 +44,12 @@ type Generator struct {
 	dryRun      bool
 }
 
-func NewGenerator(cfg *config.Config, apiClient *api.Client, slackNotifier *slack.Notifier, telegramNotifier *telegram.Notifier, dryRun bool) *Generator {
+func NewGenerator(cfg *config.Config, apiClient *api.Client, notifier notify.Group, dryRun bool) *Generator {
 	return &Generator{
 		cfg:         cfg,
 		apiClient:   apiClient,
 		priceClient: price.NewClient(),
-		slack:       slackNotifier,
-		telegram:    telegramNotifier,
+		notifier:    notifier,
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
 		marshalizer: &marshal.ProtoMarshalizer{},
 		hasher:      &hasher.Blake2b{},
@@ -88,24 +82,6 @@ type walletPayout struct {
 	Amount int64
 }
 
-type walletTotal struct {
-	Address  string
-	Nickname string
-	Amount   int64
-}
-
-type paydaySummary struct {
-	Submitted  int
-	Totals     []walletTotal
-	GrandTotal int64
-}
-
-const (
-	paydayHeader   = "🎉 PAYDAY! Cash is in the air 💸🥳"
-	paydaySubtitle = "It's payment day, fam — %d transaction(s) just dropped on the multisig. Time to sign and celebrate!"
-	multisignURL   = "https://kleverscan.org/multisign"
-)
-
 type Plan struct {
 	Validators      []*ValidatorPlan
 	KLVBRLPrice     float64
@@ -117,12 +93,12 @@ type Plan struct {
 
 func (g *Generator) Run() error {
 	if err := g.cfg.ValidatePayouts(); err != nil {
-		return fmt.Errorf("invalid payouts config: %w", err)
+		return g.fail(fmt.Errorf("invalid payouts config: %w", err), 0)
 	}
 
 	plan, err := g.BuildPlan()
 	if err != nil {
-		return fmt.Errorf("build plan: %w", err)
+		return g.fail(fmt.Errorf("build plan: %w", err), 0)
 	}
 
 	g.PrintPlan(plan)
@@ -130,7 +106,7 @@ func (g *Generator) Run() error {
 	stamp := plan.GeneratedAt.UTC().Format("20060102T150405Z")
 	g.outputDir = filepath.Join("payouts", stamp)
 	if err := os.MkdirAll(g.outputDir, 0o755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
+		return g.fail(fmt.Errorf("create output dir: %w", err), 0)
 	}
 
 	failures := 0
@@ -145,20 +121,13 @@ func (g *Generator) Run() error {
 		}
 	}
 
-	if !g.dryRun && g.slack != nil && g.slack.Enabled() {
-		if err := g.notifySlack(plan); err != nil {
-			log.Printf("WARN: failed to send slack payday notification: %v", err)
-		}
-	}
-
-	if !g.dryRun && g.telegram != nil && g.telegram.Enabled() {
-		if err := g.notifyTelegram(plan); err != nil {
-			log.Printf("WARN: failed to send telegram payday notification: %v", err)
-		}
+	summary := buildPaydaySummary(plan)
+	if !g.dryRun && summary.Submitted > 0 {
+		g.notifier.SendPayday(summary)
 	}
 
 	if failures > 0 {
-		return fmt.Errorf("%d validator transaction(s) failed", failures)
+		return g.fail(&notify.SubmissionError{Failures: failures}, summary.Submitted)
 	}
 	return nil
 }
@@ -301,20 +270,20 @@ func (g *Generator) PrintPlan(plan *Plan) {
 	log.Printf("=== Payment plan (generated %s) ===", plan.GeneratedAt.Format(time.RFC3339))
 	if plan.InfraTotalKLV > 0 {
 		log.Printf("Infra cost: %.2f BRL @ %.6f BRL/KLV = %s KLV (total)",
-			plan.InfraTotalBRL, plan.KLVBRLPrice, formatKLV(plan.InfraTotalKLV))
+			plan.InfraTotalBRL, plan.KLVBRLPrice, notify.FormatKLV(plan.InfraTotalKLV))
 	} else {
 		log.Printf("Infra cost: 0 (none configured)")
 	}
-	log.Printf("Balance floor (per validator): %s KLV", formatKLV(plan.BalanceFloor))
+	log.Printf("Balance floor (per validator): %s KLV", notify.FormatKLV(plan.BalanceFloor))
 
 	var sumBalance, sumStaking, sumAllowance, sumInfra, sumWallets int64
 	for _, vp := range plan.Validators {
 		log.Printf("")
 		log.Printf("[%s] owner %s", vp.Validator.DisplayName, vp.OwnerAddress)
-		log.Printf("  balance:         %s KLV", formatKLV(vp.Balance))
-		log.Printf("  staking rewards: %s KLV", formatKLV(vp.StakingRewards))
-		log.Printf("  allowance:       %s KLV", formatKLV(vp.Allowance))
-		log.Printf("  claimable total: %s KLV", formatKLV(vp.StakingRewards+vp.Allowance))
+		log.Printf("  balance:         %s KLV", notify.FormatKLV(vp.Balance))
+		log.Printf("  staking rewards: %s KLV", notify.FormatKLV(vp.StakingRewards))
+		log.Printf("  allowance:       %s KLV", notify.FormatKLV(vp.Allowance))
+		log.Printf("  claimable total: %s KLV", notify.FormatKLV(vp.StakingRewards+vp.Allowance))
 		sumBalance += vp.Balance
 		sumStaking += vp.StakingRewards
 		sumAllowance += vp.Allowance
@@ -324,30 +293,30 @@ func (g *Generator) PrintPlan(plan *Plan) {
 			continue
 		}
 		log.Printf("  → distribute:    %s KLV (after floor %s)",
-			formatKLV(vp.Balance+vp.StakingRewards+vp.Allowance-vp.BalanceFloor),
-			formatKLV(vp.BalanceFloor))
+			notify.FormatKLV(vp.Balance+vp.StakingRewards+vp.Allowance-vp.BalanceFloor),
+			notify.FormatKLV(vp.BalanceFloor))
 		if vp.InfraShare > 0 {
-			log.Printf("    infra share:   %s KLV → %s (%s)", formatKLV(vp.InfraShare), vp.InfraAddress, vp.InfraNickname)
+			log.Printf("    infra share:   %s KLV → %s (%s)", notify.FormatKLV(vp.InfraShare), vp.InfraAddress, vp.InfraNickname)
 			sumInfra += vp.InfraShare
 		}
 		for i, p := range vp.WalletPayouts {
 			tag := ""
 			if i == 0 && vp.DustToFirst > 0 {
-				tag = fmt.Sprintf(" [+%s dust]", formatKLV(vp.DustToFirst))
+				tag = fmt.Sprintf(" [+%s dust]", notify.FormatKLV(vp.DustToFirst))
 			}
-			log.Printf("    wallet share:  %s KLV → %s (%s)%s", formatKLV(p.Amount), p.Wallet.Address, p.Wallet.Nickname, tag)
+			log.Printf("    wallet share:  %s KLV → %s (%s)%s", notify.FormatKLV(p.Amount), p.Wallet.Address, p.Wallet.Nickname, tag)
 			sumWallets += p.Amount
 		}
 	}
 
 	log.Printf("")
 	log.Printf("=== Totals ===")
-	log.Printf("  balances:          %s KLV", formatKLV(sumBalance))
-	log.Printf("  staking rewards:   %s KLV", formatKLV(sumStaking))
-	log.Printf("  allowance:         %s KLV", formatKLV(sumAllowance))
-	log.Printf("  claimable sum:     %s KLV", formatKLV(sumStaking+sumAllowance))
-	log.Printf("  to infra manager:  %s KLV", formatKLV(sumInfra))
-	log.Printf("  to validator wallets: %s KLV", formatKLV(sumWallets))
+	log.Printf("  balances:          %s KLV", notify.FormatKLV(sumBalance))
+	log.Printf("  staking rewards:   %s KLV", notify.FormatKLV(sumStaking))
+	log.Printf("  allowance:         %s KLV", notify.FormatKLV(sumAllowance))
+	log.Printf("  claimable sum:     %s KLV", notify.FormatKLV(sumStaking+sumAllowance))
+	log.Printf("  to infra manager:  %s KLV", notify.FormatKLV(sumInfra))
+	log.Printf("  to validator wallets: %s KLV", notify.FormatKLV(sumWallets))
 }
 
 func (g *Generator) processValidator(vp *ValidatorPlan) error {
@@ -496,8 +465,8 @@ func (g *Generator) postToMultisig(owner, hashHex string, rawTxJSON json.RawMess
 	return nil
 }
 
-func buildPaydaySummary(plan *Plan) paydaySummary {
-	summary := paydaySummary{}
+func buildPaydaySummary(plan *Plan) notify.Summary {
+	summary := notify.Summary{}
 	index := map[[2]string]int{}
 	addTotal := func(addr, nick string, amt int64) {
 		k := [2]string{addr, nick}
@@ -505,7 +474,7 @@ func buildPaydaySummary(plan *Plan) paydaySummary {
 		if !ok {
 			i = len(summary.Totals)
 			index[k] = i
-			summary.Totals = append(summary.Totals, walletTotal{Address: addr, Nickname: nick})
+			summary.Totals = append(summary.Totals, notify.WalletTotal{Address: addr, Nickname: nick})
 		}
 		summary.Totals[i].Amount += amt
 		summary.GrandTotal += amt
@@ -526,107 +495,11 @@ func buildPaydaySummary(plan *Plan) paydaySummary {
 	return summary
 }
 
-func (g *Generator) notifySlack(plan *Plan) error {
-	summary := buildPaydaySummary(plan)
-	if summary.Submitted == 0 {
-		return nil
+func (g *Generator) fail(runErr error, submitted int) error {
+	if !g.dryRun {
+		g.notifier.SendFailure(runErr, submitted)
 	}
-
-	var totalsBuf strings.Builder
-	totalsBuf.WriteString("*How much each wallet pockets today:*\n")
-	for _, t := range summary.Totals {
-		fmt.Fprintf(&totalsBuf, "  • *%s* (`%s`): *%s KLV*\n",
-			t.Nickname, t.Address, formatKLV(t.Amount))
-	}
-	fmt.Fprintf(&totalsBuf, "\n_Grand total being moved:_ *%s KLV*", formatKLV(summary.GrandTotal))
-
-	header := paydayHeader
-	subtitle := fmt.Sprintf(paydaySubtitle, summary.Submitted)
-
-	payload := map[string]any{
-		"text": header,
-		"blocks": []any{
-			map[string]any{
-				"type": "header",
-				"text": map[string]any{"type": "plain_text", "text": header, "emoji": true},
-			},
-			map[string]any{
-				"type": "section",
-				"text": map[string]any{"type": "mrkdwn", "text": subtitle},
-			},
-			map[string]any{"type": "divider"},
-			map[string]any{
-				"type": "section",
-				"text": map[string]any{"type": "mrkdwn", "text": totalsBuf.String()},
-			},
-			map[string]any{
-				"type": "context",
-				"elements": []any{
-					map[string]any{
-						"type": "mrkdwn",
-						"text": fmt.Sprintf("Sign the transactions at <%s|kleverscan.org/multisign>", multisignURL),
-					},
-				},
-			},
-		},
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	return g.slack.PostMessage(string(raw))
-}
-
-func (g *Generator) notifyTelegram(plan *Plan) error {
-	summary := buildPaydaySummary(plan)
-	if summary.Submitted == 0 {
-		return nil
-	}
-
-	var msg strings.Builder
-	fmt.Fprintf(&msg, "<b>%s</b>\n\n", html.EscapeString(paydayHeader))
-	fmt.Fprintf(&msg, "%s\n\n", html.EscapeString(fmt.Sprintf(paydaySubtitle, summary.Submitted)))
-	msg.WriteString("<b>How much each wallet pockets today:</b>\n")
-	for _, t := range summary.Totals {
-		fmt.Fprintf(&msg, "  • <b>%s</b> (<code>%s</code>): <b>%s KLV</b>\n",
-			html.EscapeString(t.Nickname), html.EscapeString(t.Address), formatKLV(t.Amount))
-	}
-	fmt.Fprintf(&msg, "\n<i>Grand total being moved:</i> <b>%s KLV</b>\n\n", formatKLV(summary.GrandTotal))
-	fmt.Fprintf(&msg, "Sign the transactions at <a href=\"%s\">kleverscan.org/multisign</a>", multisignURL)
-
-	return g.telegram.PostMessage(msg.String())
-}
-
-func (g *Generator) NotifyFailure(runErr error) {
-	if g.dryRun {
-		return
-	}
-	text := fmt.Sprintf("Payments run failed: %v. Check the logs and the multisig before re-running, some transactions may already have been posted.", runErr)
-	if g.slack != nil && g.slack.Enabled() {
-		raw, err := json.Marshal(map[string]any{"text": "🚨 " + text})
-		if err == nil {
-			err = g.slack.PostMessage(string(raw))
-		}
-		if err != nil {
-			log.Printf("WARN: failed to send slack failure notification: %v", err)
-		}
-	}
-	if g.telegram != nil && g.telegram.Enabled() {
-		if err := g.telegram.PostMessage("🚨 " + html.EscapeString(text)); err != nil {
-			log.Printf("WARN: failed to send telegram failure notification: %v", err)
-		}
-	}
-}
-
-func formatKLV(atomic int64) string {
-	sign := ""
-	if atomic < 0 {
-		sign = "-"
-		atomic = -atomic
-	}
-	whole := atomic / klvAtomicUnitsPerUnit
-	frac := atomic % klvAtomicUnitsPerUnit
-	return fmt.Sprintf("%s%d.%0*d", sign, whole, klvPrecision, frac)
+	return runErr
 }
 
 func sanitizeFilename(s string) string {

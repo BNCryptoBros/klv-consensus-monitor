@@ -11,6 +11,7 @@ import (
 	"github.com/BNCryptoBros/klv-consensus-monitor/api"
 	"github.com/BNCryptoBros/klv-consensus-monitor/config"
 	"github.com/BNCryptoBros/klv-consensus-monitor/monitor"
+	"github.com/BNCryptoBros/klv-consensus-monitor/notify"
 	"github.com/BNCryptoBros/klv-consensus-monitor/payments"
 	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
 	"github.com/BNCryptoBros/klv-consensus-monitor/telegram"
@@ -54,9 +55,7 @@ func runMonitor(cfg *config.Config, apiClient *api.Client) {
 	log.Printf("Slack notifications: %v", cfg.Slack.Enabled)
 	log.Printf("Telegram notifications: %v", cfg.Telegram.Enabled)
 
-	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
-	telegramNotifier := newTelegramNotifier(cfg)
-	mon := monitor.NewMonitor(apiClient, slackNotifier, telegramNotifier, cfg.Validators)
+	mon := monitor.NewMonitor(apiClient, newNotifiers(cfg), cfg.Validators)
 
 	if err := mon.Run(); err != nil {
 		log.Fatalf("Failed to initialize monitor: %v", err)
@@ -95,15 +94,15 @@ func runPayments(cfg *config.Config, apiClient *api.Client, dryRun bool) {
 			log.Printf("Telegram payday notification: enabled")
 		}
 	}
-	slackNotifier := slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate)
-	telegramNotifier := newTelegramNotifier(cfg)
-	gen := payments.NewGenerator(cfg, apiClient, slackNotifier, telegramNotifier, dryRun)
+	gen := payments.NewGenerator(cfg, apiClient, newNotifiers(cfg), dryRun)
 	if err := gen.Run(); err != nil {
-		gen.NotifyFailure(err)
 		log.Fatalf("payments run failed: %v", err)
 	}
 }
 
-func newTelegramNotifier(cfg *config.Config) *telegram.Notifier {
-	return telegram.NewNotifier(cfg.Telegram.Enabled, cfg.Telegram.BotToken, cfg.Telegram.ChatID, cfg.Telegram.MessageTemplate)
+func newNotifiers(cfg *config.Config) notify.Group {
+	return notify.Group{
+		slack.NewNotifier(cfg.Slack.Enabled, cfg.Slack.WebhookURL, cfg.Slack.MessageTemplate),
+		telegram.NewNotifier(cfg.Telegram.Enabled, cfg.Telegram.BotToken, cfg.Telegram.ChatID, cfg.Telegram.MessageTemplate),
+	}
 }
