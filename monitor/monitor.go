@@ -7,18 +7,18 @@ import (
 
 	"github.com/BNCryptoBros/klv-consensus-monitor/api"
 	"github.com/BNCryptoBros/klv-consensus-monitor/models"
-	"github.com/BNCryptoBros/klv-consensus-monitor/slack"
+	"github.com/BNCryptoBros/klv-consensus-monitor/notify"
 )
 
 type Monitor struct {
 	apiClient         *api.Client
-	slackNotifier     *slack.Notifier
+	notifier          notify.Group
 	monitoredList     []models.MonitoredValidator
 	validatorStates   map[string]*models.ValidatorState
 	currentEpoch      int
 }
 
-func NewMonitor(apiClient *api.Client, slackNotifier *slack.Notifier, validators []models.MonitoredValidator) *Monitor {
+func NewMonitor(apiClient *api.Client, notifier notify.Group, validators []models.MonitoredValidator) *Monitor {
 	states := make(map[string]*models.ValidatorState)
 	for _, v := range validators {
 		states[v.BLSKey] = &models.ValidatorState{
@@ -31,7 +31,7 @@ func NewMonitor(apiClient *api.Client, slackNotifier *slack.Notifier, validators
 
 	return &Monitor{
 		apiClient:       apiClient,
-		slackNotifier:   slackNotifier,
+		notifier:        notifier,
 		monitoredList:   validators,
 		validatorStates: states,
 		currentEpoch:    -1,
@@ -118,9 +118,7 @@ func (m *Monitor) updateValidatorStates(validators []models.ValidatorInfo, epoch
 				currentStatus,
 				epoch)
 
-			if err := m.slackNotifier.SendStatusChange(state.DisplayName, previousStatus, currentStatus, epoch); err != nil {
-				log.Printf("Failed to send Slack notification: %v", err)
-			}
+			m.notifier.SendStatusChange(state.DisplayName, previousStatus, currentStatus, epoch)
 		}
 	}
 }

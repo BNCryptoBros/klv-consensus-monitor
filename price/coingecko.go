@@ -4,33 +4,39 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 )
 
 type Client struct {
-	httpClient *http.Client
+	httpClient  *http.Client
+	retryDelays []time.Duration
 }
 
 func NewClient() *Client {
 	return &Client{
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient:  &http.Client{Timeout: 15 * time.Second},
+		retryDelays: []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second},
 	}
 }
 
 func (c *Client) FetchKLVPerBRL(apiURL, jsonPath string) (float64, error) {
-	resp, err := c.httpClient.Get(apiURL)
-	if err != nil {
-		return 0, fmt.Errorf("fetch price: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("read price: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("price api returned %d: %s", resp.StatusCode, string(body))
+	var body []byte
+	var retryable bool
+	var err error
+	for attempt := 0; ; attempt++ {
+		body, retryable, err = c.fetch(apiURL)
+		if err == nil {
+			break
+		}
+		if !retryable || attempt >= len(c.retryDelays) {
+			return 0, err
+		}
+		delay := c.retryDelays[attempt]
+		log.Printf("price fetch attempt %d failed: %v; retrying in %s", attempt+1, err, delay)
+		time.Sleep(delay)
 	}
 
 	var raw any
@@ -51,6 +57,24 @@ func (c *Client) FetchKLVPerBRL(apiURL, jsonPath string) (float64, error) {
 		return 0, fmt.Errorf("price at %q is non-positive: %v", jsonPath, value)
 	}
 	return priceBRLPerKLV, nil
+}
+
+func (c *Client) fetch(apiURL string) ([]byte, bool, error) {
+	resp, err := c.httpClient.Get(apiURL)
+	if err != nil {
+		return nil, true, fmt.Errorf("fetch price: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, true, fmt.Errorf("read price: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("price api returned %d: %s", resp.StatusCode, string(body))
+		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return nil, retryable, err
+	}
+	return body, false, nil
 }
 
 func walkPath(node any, path string) (any, error) {

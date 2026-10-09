@@ -67,3 +67,15 @@ slack:
         }
       ]
     }
+
+telegram:
+  enabled: false
+  botToken: "YOUR_BOT_TOKEN"              # from @BotFather
+  chatId: "YOUR_CHAT_ID"                  # e.g. "-1001234567890" for a group/channel, or "@channelname"
+  messageTemplate: |
+    🔔 <b>Validator Status Changed</b>
+
+    <b>Validator:</b> {{displayName}}
+    <b>Epoch:</b> {{epoch}}
+    <b>Old Status:</b> {{oldStatus}}
+    <b>New Status:</b> {{newStatus}}
