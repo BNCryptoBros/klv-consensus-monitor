@@ -52,10 +52,11 @@ func main() {
 func runMonitor(cfg *config.Config, apiClient *api.Client) {
 	log.Printf("Loaded configuration: monitoring %d validators", len(cfg.Validators))
 	log.Printf("Poll Interval: %d seconds", cfg.PollInterval)
+	log.Printf("Notify on every election: %v", cfg.NotifyOnEveryElection)
 	log.Printf("Slack notifications: %v", cfg.Slack.Enabled)
 	log.Printf("Telegram notifications: %v", cfg.Telegram.Enabled)
 
-	mon := monitor.NewMonitor(apiClient, newNotifiers(cfg), cfg.Validators)
+	mon := monitor.NewMonitor(apiClient, newNotifiers(cfg), cfg.Validators, cfg.NotifyOnEveryElection)
 
 	if err := mon.Run(); err != nil {
 		log.Fatalf("Failed to initialize monitor: %v", err)

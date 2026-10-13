@@ -24,13 +24,14 @@ type TelegramConfig struct {
 const defaultTelegramMessageTemplate = "🔔 <b>Validator Status Changed</b>\n\n<b>Validator:</b> {{displayName}}\n<b>Epoch:</b> {{epoch}}\n<b>Old Status:</b> {{oldStatus}}\n<b>New Status:</b> {{newStatus}}"
 
 type Config struct {
-	NodeBaseURL    string                      `yaml:"nodeBaseUrl"`
-	APIBaseURL     string                      `yaml:"apiBaseUrl"`
-	PollInterval   int                         `yaml:"pollInterval"`
-	Validators     []models.MonitoredValidator `yaml:"validators"`
-	Slack          SlackConfig                 `yaml:"slack"`
-	Telegram       TelegramConfig              `yaml:"telegram"`
-	Payouts        models.PayoutsConfig        `yaml:"payouts"`
+	NodeBaseURL           string                      `yaml:"nodeBaseUrl"`
+	APIBaseURL            string                      `yaml:"apiBaseUrl"`
+	NotifyOnEveryElection bool                        `yaml:"notifyOnEveryElection"`
+	PollInterval          int                         `yaml:"pollInterval"`
+	Validators            []models.MonitoredValidator `yaml:"validators"`
+	Slack                 SlackConfig                 `yaml:"slack"`
+	Telegram              TelegramConfig              `yaml:"telegram"`
+	Payouts               models.PayoutsConfig        `yaml:"payouts"`
 }
 
 func Load(filepath string) (*Config, error) {

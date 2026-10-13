@@ -11,14 +11,16 @@ import (
 )
 
 type Monitor struct {
-	apiClient         *api.Client
-	notifier          notify.Group
-	monitoredList     []models.MonitoredValidator
-	validatorStates   map[string]*models.ValidatorState
-	currentEpoch      int
+	apiClient       *api.Client
+	notifier        notify.Group
+	monitoredList   []models.MonitoredValidator
+	validatorStates map[string]*models.ValidatorState
+	currentEpoch    int
+
+	notifyOnEveryElection bool
 }
 
-func NewMonitor(apiClient *api.Client, notifier notify.Group, validators []models.MonitoredValidator) *Monitor {
+func NewMonitor(apiClient *api.Client, notifier notify.Group, validators []models.MonitoredValidator, notifyOnEveryElection bool) *Monitor {
 	states := make(map[string]*models.ValidatorState)
 	for _, v := range validators {
 		states[v.BLSKey] = &models.ValidatorState{
@@ -35,6 +37,8 @@ func NewMonitor(apiClient *api.Client, notifier notify.Group, validators []model
 		monitoredList:   validators,
 		validatorStates: states,
 		currentEpoch:    -1,
+
+		notifyOnEveryElection: notifyOnEveryElection,
 	}
 }
 
@@ -108,7 +112,7 @@ func (m *Monitor) updateValidatorStates(validators []models.ValidatorInfo, epoch
 				state.DisplayName,
 				currentStatus,
 				epoch)
-		} else if previousStatus != currentStatus || currentStatus == "elected" {
+		} else if previousStatus != currentStatus || (m.notifyOnEveryElection && currentStatus == "elected") {
 			state.Status = currentStatus
 			state.Epoch = epoch
 			log.Printf("[%s] %s - Status changed: %s → %s (Epoch: %d)",
