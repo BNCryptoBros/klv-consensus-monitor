@@ -10,6 +10,10 @@ import (
 	"github.com/BNCryptoBros/klv-consensus-monitor/notify"
 )
 
+// StatusMissing is the status recorded for a monitored validator that is absent
+// from the node's validator statistics.
+const StatusMissing = "missing"
+
 type Monitor struct {
 	apiClient       *api.Client
 	notifier        notify.Group
@@ -59,7 +63,9 @@ func (m *Monitor) Run() error {
 		return fmt.Errorf("failed to fetch initial validator list: %w", err)
 	}
 
-	m.updateValidatorStates(validators, m.currentEpoch, true)
+	if err := m.updateValidatorStates(validators, m.currentEpoch, true); err != nil {
+		return fmt.Errorf("failed to set initial validator states: %w", err)
+	}
 
 	return nil
 }
@@ -72,37 +78,47 @@ func (m *Monitor) Check() error {
 
 	if block.Epoch != m.currentEpoch {
 		log.Printf("New epoch detected: %d (previous: %d)", block.Epoch, m.currentEpoch)
-		m.currentEpoch = block.Epoch
 
 		validators, err := m.apiClient.FetchValidatorList()
 		if err != nil {
 			return fmt.Errorf("failed to fetch validator list: %w", err)
 		}
 
-		m.updateValidatorStates(validators, block.Epoch, false)
+		if err := m.updateValidatorStates(validators, block.Epoch, false); err != nil {
+			return fmt.Errorf("failed to update validator states: %w", err)
+		}
+
+		// Only mark the epoch as processed once its states were applied, so a
+		// failed fetch is retried on the next check instead of being skipped.
+		m.currentEpoch = block.Epoch
 	}
 
 	return nil
 }
 
-func (m *Monitor) updateValidatorStates(validators []models.ValidatorInfo, epoch int, isInitial bool) {
+func (m *Monitor) updateValidatorStates(validators []models.ValidatorInfo, epoch int, isInitial bool) error {
+	// An empty list means the node returned bad data, not that every validator
+	// left; reject it instead of reporting all monitored validators as missing.
+	if len(validators) == 0 {
+		return fmt.Errorf("validator list is empty at epoch %d", epoch)
+	}
+
 	validatorMap := make(map[string]*models.ValidatorInfo)
 	for i := range validators {
 		validatorMap[validators[i].BLSPublicKey] = &validators[i]
 	}
 
 	for blsKey, state := range m.validatorStates {
-		validator, found := validatorMap[blsKey]
-		if !found {
+		previousStatus := state.Status
+		currentStatus := StatusMissing
+		if validator, found := validatorMap[blsKey]; found {
+			currentStatus = validator.ValidatorStatus
+		} else {
 			log.Printf("[%s] %s - Validator not found in validator list at epoch %d",
 				time.Now().Format("2006-01-02 15:04:05"),
 				state.DisplayName,
 				epoch)
-			continue
 		}
-
-		previousStatus := state.Status
-		currentStatus := validator.ValidatorStatus
 
 		if isInitial {
 			state.Status = currentStatus
@@ -125,4 +141,6 @@ func (m *Monitor) updateValidatorStates(validators []models.ValidatorInfo, epoch
 			m.notifier.SendStatusChange(state.DisplayName, previousStatus, currentStatus, epoch)
 		}
 	}
+
+	return nil
 }
