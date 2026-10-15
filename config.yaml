@@ -1,6 +1,7 @@
 apiBaseUrl: "https://api.mainnet.klever.org"
 nodeBaseUrl: "https://node.mainnet.klever.org"
 pollInterval: 30
+notifyOnEveryElection: false            # true = also alert every epoch while a validator stays "elected"; false = alert only when status changes
 
 validators:
   - blsKey: "7aaa257b3da2a6444ffe5a8dd4f9f4d0d2a7c729addc723727618687aac38d08087149f239377abc9f045e01a00fb9040785c777abe11059297522ff0849dc268f152cce81b6250193422682a11b60684a9866a5443d5e279f7f00cfdcf68601"
@@ -20,7 +21,7 @@ payouts:
     - address: "klv137tsxetne45eanp70f5a4ed4ervhzkapyvc9r6h9sw7nrcwe60qqywn7al"
       nickname: "B"
     - address: "klv18a5nrr0ekfn2a9wkgsvyacc4t7fxsnftlazcw2ndupvpqysvaqdsnfr695"
-      nickname: "N"    
+      nickname: "N"
     - address: "klv1axxyp3ka0yrsz2nxhj3nwm2mx982nc3ytwlvzuag2nuj3v7djxxs620ct0"
       nickname: "C"
   infraCost:

@@ -19,6 +19,7 @@ Edit `config.yaml`:
 nodeBaseUrl: "https://node.mainnet.klever.org"
 apiBaseUrl: "https://api.mainnet.klever.org"
 pollInterval: 30
+notifyOnEveryElection: false
 
 validators:
   - blsKey: "your_validator_bls_public_key_here"
@@ -45,6 +46,9 @@ Slack and Telegram are independent: each one has its own `enabled` flag and can 
 **Required fields:**
 - `validators[].blsKey`: 192-character BLS public key
 - `validators[].displayName`: Human-readable name
+
+**Optional fields:**
+- `notifyOnEveryElection` (default `false`): by default an alert is sent only when a validator's status differs from its previous one. Set to `true` to also send an alert every epoch in which the validator is `elected`, even if it was already `elected` before (the message will show `elected → elected`). Other statuses always alert only on change.
 
 **Telegram setup:**
 - Create a bot with [@BotFather](https://t.me/BotFather) and copy its token into `telegram.botToken`
