@@ -4,7 +4,7 @@ A lightweight Go program that monitors Klever blockchain validators and sends no
 
 ## Features
 
-- Monitors validator status changes (elected, eligible, waiting, jailed)
+- Monitors validator status changes (elected, eligible, waiting, jailed, missing)
 - Tracks epoch transitions
 - Slack webhook notifications with customizable messages
 - Telegram bot notifications with customizable messages
@@ -60,6 +60,8 @@ Slack and Telegram are independent: each one has its own `enabled` flag and can 
 - `{{oldStatus}}`: Previous status
 - `{{newStatus}}`: Current status
 - `{{epoch}}`: Epoch number
+
+A monitored validator that is absent from the node's validator statistics gets the status `missing`, so you are alerted once when it drops out (e.g. `elected → missing`) and once when it comes back (`missing → elected`). An empty statistics response is treated as a node error rather than marking every validator `missing`; the epoch is retried on the next check.
 
 ## Running
 
